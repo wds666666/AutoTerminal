@@ -102,3 +102,48 @@ class ShellTests(unittest.TestCase):
                     expected,
                 )
                 client.assert_not_called()
+
+    def test_history_fallback_without_shell_integration(self):
+        for session in ({}, {"command": "at", "returncode": 130}):
+            with (
+                patch.object(sys, "argv", ["at"]),
+                patch.object(main_module, "ConfigLoader") as loader,
+                patch.object(main_module, "LLMClient") as client,
+                patch.object(main_module, "get_shell_session", return_value=session),
+                patch.object(
+                    main_module,
+                    "get_shell_history",
+                    return_value=["atp list --upgradable", "at", "at --show-context"],
+                ),
+                patch("builtins.input", return_value="cancel"),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                loader.return_value.get_config.return_value = {
+                    "api_key": "test",
+                    "base_url": "https://example.com",
+                    "model": "test",
+                }
+                client.return_value.generate_command.return_value = (
+                    "apt list --upgradable"
+                )
+                self.assertEqual(main_module.main(), 0)
+                context = client.return_value.generate_command.call_args.kwargs[
+                    "recommendation_context"
+                ]
+                self.assertEqual(
+                    context,
+                    {
+                        "command": "atp list --upgradable",
+                        "source": "shell_history",
+                        "returncode": None,
+                    },
+                )
+                self.assertIn("$ apt list --upgradable", stdout.getvalue())
+                self.assertNotIn("Shell", stdout.getvalue())
+
+    def test_live_session_takes_priority_over_disk_history(self):
+        from autoterminal.shell import recommendation_target
+
+        session = {"command": "git stats", "returncode": 1, "source": "parent_shell"}
+        self.assertEqual(recommendation_target(session, ["atp install"], []), session)
+        self.assertEqual(recommendation_target({}, ["at", "at --show-context"], []), {})

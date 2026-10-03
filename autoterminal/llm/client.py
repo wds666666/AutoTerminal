@@ -5,12 +5,14 @@ from typing import Any
 
 from openai import OpenAI
 
+from autoterminal.config.prompts import migrate_prompts
+
 
 class LLMClient:
     """OpenAI 兼容客户端，包含有界上下文和完整输出校验。"""
 
     def __init__(self, config: dict[str, Any]):
-        self.config = config
+        self.config = migrate_prompts(config)
         self.client = OpenAI(
             api_key=config["api_key"],
             base_url=config["base_url"],
@@ -30,6 +32,7 @@ class LLMClient:
         shell_history: list[str] | None = None,
         last_executed_command: str = "",
         shell_session: dict | None = None,
+        recommendation_context: dict | None = None,
     ) -> str:
         prompt_key = "default_prompt" if user_input else "recommendation_prompt"
         system_prompt = (
@@ -45,8 +48,18 @@ class LLMClient:
             "若退出码非零，优先纠正该命令的明显拼写或语法错误，不要转而推荐无关的项目任务。"
             "没有 stderr 时不要编造报错原因；不要擅自补充软件包名或自动提升权限。"
             "明确的用户需求优先于失败命令。"
+            "无参数时围绕 recommendation_context.command 推荐；实时 Shell 信息优先，否则使用最近有效历史。"
+            "source 为 shell_history 时退出码未知，不代表命令成功，也不代表没有上下文。"
+            "即使没有退出码，也应纠正明显拼写错误，例如历史中的 atp list --upgradable 应输出 apt list --upgradable。"
+            "保留原命令的选项及参数。历史中的 at、at --show-context 是助手调用，不是待纠正任务。"
+            "磁盘历史可能陈旧，不要声称它一定刚刚失败；仅当意图清楚时推荐。"
+            "禁止仅因目录有 .git 或 pyproject.toml 就推荐 git status、pytest 或安装依赖。"
+            "退出码 127 通常表示命令未找到，应先检查命令名拼写；例如 atp install 应纠正为 apt install。"
+            "apt insall 应纠正为 apt install；保留已有参数，不臆造包名，不自动加 sudo。"
+            "退出码为 0 不代表用户需要继续操作；无明确后续意图时返回空字符串。"
         )
         context = {
+            "recommendation_context": recommendation_context or {},
             "shell_session": shell_session or {},
             "cwd": os.getcwd(),
             "os": platform.system(),

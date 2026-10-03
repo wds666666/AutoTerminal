@@ -10,7 +10,7 @@ from autoterminal.config.manager import ConfigManager
 from autoterminal.config.providers import PROVIDERS
 from autoterminal.history import HistoryManager
 from autoterminal.llm.client import LLMClient
-from autoterminal.shell import get_shell_session, shell_init
+from autoterminal.shell import get_shell_session, recommendation_target, shell_init
 from autoterminal.utils.helpers import (
     clean_command,
     get_directory_context,
@@ -85,6 +85,9 @@ def main():
             else "",
             shell_session=get_shell_session() if count else {},
         )
+        context["recommendation_context"] = recommendation_target(
+            context["shell_session"], context["shell_history"], context["history"]
+        )
         if args.show_context:
             print(
                 json.dumps(
@@ -92,11 +95,11 @@ def main():
                 )
             )
             return 0
-        if not user_input and count and not context["shell_session"]:
+        if not user_input and not context["recommendation_context"]:
             print(
-                "提示：未接入当前 Shell，无法确定刚执行的命令及退出码。可用 --show-context 检查。",
-                file=sys.stderr,
+                '没有找到相关的命令建议。可以直接输入需求，例如：at "查看当前目录下的文件"'
             )
+            return 0
         client = LLMClient(config)
         generated = client.generate_command(**context)
         command = clean_command(generated)

@@ -1,7 +1,9 @@
 import json
 import os
 
+from autoterminal.config.prompts import migrate_prompts
 from autoterminal.utils.logger import logger
+from autoterminal.utils.storage import write_json
 
 
 class ConfigLoader:
@@ -35,4 +37,13 @@ class ConfigLoader:
 
     def get_config(self) -> dict:
         """获取配置"""
-        return self.load_from_file()
+        config = self.load_from_file()
+        if not config:
+            return config
+        migrated = migrate_prompts(config)
+        if migrated != config:
+            try:
+                write_json(self.config_file, migrated)
+            except OSError as exc:
+                logger.warning(f"默认提示词已更新，但无法保存配置: {exc}")
+        return migrated

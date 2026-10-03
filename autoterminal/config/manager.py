@@ -3,6 +3,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from autoterminal.config.loader import ConfigLoader
+from autoterminal.config.prompts import migrate_prompts
 from autoterminal.config.providers import PROVIDERS, fetch_models
 from autoterminal.utils.logger import logger
 from autoterminal.utils.storage import write_json
@@ -37,7 +38,7 @@ class ConfigManager:
 
     def initialize_config(self, existing=None) -> dict[str, Any]:
         print("欢迎使用 AutoTerminal 配置向导！")
-        config = {**self.default_config, **(existing or {})}
+        config = migrate_prompts({**self.default_config, **(existing or {})})
         for key in self.required_keys:
             value = config.get(key)
             config[key] = value.strip() if isinstance(value, str) else ""

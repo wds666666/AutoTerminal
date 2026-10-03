@@ -101,7 +101,11 @@ class LLMClient:
             user_input
             or "根据上下文推荐下一条有用的命令，避免重复最后执行的命令。无明确线索则返回空字符串。"
         )
-        response = self.client.chat.completions.create(
+        request_client = self.client
+        if not user_input:
+            system_prompt += "无建议时只输出 NO_COMMAND，立即结束，不输出空白或解释。"
+            request_client = self.client.with_options(timeout=8, max_retries=0)
+        response = request_client.chat.completions.create(
             model=self.config["model"],
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -113,7 +117,7 @@ class LLMClient:
                     + user_content,
                 },
             ],
-            max_tokens=4096,
+            max_tokens=4096 if user_input else 1024,
         )
         if not response.choices:
             raise ValueError("服务商未返回命令")
@@ -129,4 +133,5 @@ class LLMClient:
         content = choice.message.content
         if not isinstance(content, str):
             raise ValueError("模型返回内容为空或格式不正确")
-        return content.strip()
+        command = content.strip()
+        return "" if not user_input and command == "NO_COMMAND" else command

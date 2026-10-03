@@ -10,6 +10,7 @@ from autoterminal.config.manager import ConfigManager
 from autoterminal.config.providers import PROVIDERS
 from autoterminal.history import HistoryManager
 from autoterminal.llm.client import LLMClient
+from autoterminal.recommendations import EmptyRecommendationCache, is_self_install
 from autoterminal.shell import get_shell_session, recommendation_target, shell_init
 from autoterminal.utils.helpers import (
     clean_command,
@@ -100,10 +101,18 @@ def main():
                 '没有找到相关的命令建议。可以直接输入需求，例如：at "查看当前目录下的文件"'
             )
             return 0
+        cache = None
+        if not user_input:
+            cache = EmptyRecommendationCache(config, context)
+            if is_self_install(context["recommendation_context"]) or cache.hit():
+                print("没有找到相关的命令建议。")
+                return 0
         client = LLMClient(config)
         generated = client.generate_command(**context)
         command = clean_command(generated)
         if not command:
+            if cache is not None:
+                cache.remember()
             print("没有找到相关的命令建议。" if not user_input else "模型未生成命令。")
             return 0 if not user_input else 1
         print(f"$ {command}")

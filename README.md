@@ -176,16 +176,16 @@ at
 
 GitHub Actions 在 main 推送/PR 时自动测试和构建；推送 `v*` 标签时，测试、构建、版本一致性检查通过后自动发布到 PyPI。
 使用 `.github/workflows/publish.yml` 和 `pypi` 环境，通过 Trusted Publishing 上传，不需要 API Token。
-发布时更新版本号并提交，执行 `git push origin main`、`git tag v1.1.2`、`git push origin v1.1.2`。
+发布时更新版本号并提交，执行 `git push origin main`、`git tag v1.1.3`、`git push origin v1.1.3`。
 以下手动上传步骤仅作为备用。
 发布前更新 `pyproject.toml`、`uv.lock` 中的项目版本以及 `CHANGELOG.md`。
-以下以 1.1.2 为例；后续版本需同步替换命令中的版本号。
+以下以 1.1.3 为例；后续版本需同步替换命令中的版本号。
 
 ```bash
 AUTOTERMINAL_FILE_LOG=false uv run --frozen python -m unittest discover -s tests -v
-uv build --out-dir dist/1.1.2
-uv run --frozen twine check dist/1.1.2/*
-uv run --frozen twine upload --username __token__ dist/1.1.2/*
+uv build --out-dir dist/1.1.3
+uv run --frozen twine check dist/1.1.3/*
+uv run --frozen twine upload --username __token__ dist/1.1.3/*
 ```
 
 上传时密码填写 PyPI API Token（以 `pypi-` 开头），不是登录密码。
@@ -193,7 +193,7 @@ uv run --frozen twine upload --username __token__ dist/1.1.2/*
 Token 可在 [PyPI 账号设置](https://pypi.org/manage/account/#api-tokens) 中创建，选择 `autoterminal` 项目权限。
 不要将 Token 写进仓库。PyPI 已上传的文件不能覆盖；后续发布需要新版本号。
 
-Git 提交与 PyPI 上传是独立步骤；上传成功后可以用 `uv tool install --force autoterminal==1.1.2` 安装。
+Git 提交与 PyPI 上传是独立步骤；上传成功后可以用 `uv tool install --force autoterminal==1.1.3` 安装。
 参考：[Python 官方打包教程](https://packaging.python.org/en/latest/tutorials/packaging-projects/)。
 
 ### 升级时的默认提示词迁移

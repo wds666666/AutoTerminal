@@ -1,107 +1,83 @@
 import os
-from typing import List
+import re
+from itertools import islice
+
 from autoterminal.utils.logger import logger
 
 
 def clean_command(command: str) -> str:
-    """清理命令字符串"""
-    # 移除可能的引号和多余空格
+    """仅解包完整 Markdown 围栏，不破坏命令本身的引号。"""
     command = command.strip()
-    if command.startswith('"') and command.endswith('"'):
-        command = command[1:-1]
-    if command.startswith("'") and command.endswith("'"):
-        command = command[1:-1]
-    return command.strip()
+    if command.startswith("```"):
+        match = re.fullmatch(r"```(?:bash|sh|shell|zsh)?\s*\n(.*?)\n```", command, re.S)
+        if not match:
+            raise ValueError("模型返回了不完整的代码块，未执行")
+        command = match.group(1).strip()
+    if "\x00" in command:
+        raise ValueError("命令包含无效字符")
+    return command
 
 
-def get_shell_history(count: int = 20) -> List[str]:
-    """
-    获取系统 Shell 历史命令
-
-    Args:
-        count: 获取最近的命令数量
-
-    Returns:
-        最近执行的 Shell 命令列表
-    """
-    history_commands = []
-
+def get_directory_context(limit=200) -> list[str]:
     try:
-        # 尝试从环境变量获取历史文件路径
-        histfile = os.getenv('HISTFILE')
+        with os.scandir(".") as entries:
+            names = [
+                entry.name + ("/" if entry.is_dir(follow_symlinks=False) else "")
+                for entry in islice(entries, limit + 1)
+            ]
+        return sorted(names[:limit]) + (
+            ["（目录项已截断）"] if len(names) > limit else []
+        )
+    except OSError as exc:
+        logger.warning(f"无法获取目录内容: {exc}")
+        return []
 
-        # 如果没有 HISTFILE，根据 SHELL 推断
-        if not histfile or not os.path.exists(histfile):
-            home_dir = os.path.expanduser("~")
-            shell = os.getenv('SHELL', '')
 
-            # 根据当前 Shell 类型优先尝试对应的历史文件
-            possible_files = []
-            if 'zsh' in shell:
-                possible_files = [
-                    os.path.join(home_dir, ".zsh_history"),
-                    os.path.join(home_dir, ".zhistory"),
-                    os.path.join(home_dir, ".bash_history"),
-                ]
-            else:  # bash 或其他
-                possible_files = [
-                    os.path.join(home_dir, ".bash_history"),
-                    os.path.join(home_dir, ".zsh_history"),
-                    os.path.join(home_dir, ".zhistory"),
-                ]
-
-            for file_path in possible_files:
-                if os.path.exists(file_path):
-                    histfile = file_path
+def get_shell_history(count: int = 20) -> list[str]:
+    """读取已落盘的 Bash/Zsh 历史，最多读取末尾 256 KiB。"""
+    if count <= 0:
+        return []
+    histfile = os.getenv("HISTFILE")
+    if not histfile:
+        names = (
+            (".zsh_history", ".zhistory", ".bash_history")
+            if "zsh" in os.getenv("SHELL", "")
+            else (".bash_history", ".zsh_history", ".zhistory")
+        )
+        histfile = next(
+            (
+                os.path.expanduser("~/" + name)
+                for name in names
+                if os.path.isfile(os.path.expanduser("~/" + name))
+            ),
+            None,
+        )
+    if not histfile:
+        return []
+    try:
+        with open(os.path.expanduser(histfile), "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            offset = max(0, stream.tell() - 256 * 1024)
+            stream.seek(offset)
+            if offset:
+                stream.readline()  # 丢弃可能截断的首行
+            lines = stream.read().decode("utf-8", errors="replace").splitlines()
+        commands, seen = [], set()
+        for line in reversed(lines):
+            line = re.sub(r"^: \d+:\d+;", "", line).strip()
+            if not line or re.fullmatch(r"#\d+", line):
+                continue
+            if any(
+                word in line.lower()
+                for word in ("password", "passwd", "secret", "key", "token")
+            ):
+                continue
+            if line not in seen:
+                commands.append(line)
+                seen.add(line)
+                if len(commands) >= count:
                     break
-
-        if histfile and os.path.exists(histfile):
-            logger.debug(f"读取 Shell 历史文件: {histfile}")
-
-            with open(histfile, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-
-            # 过滤和清理命令
-            for line in lines:
-                line = line.strip()
-
-                # 跳过空行
-                if not line:
-                    continue
-
-                # 处理 zsh 扩展历史格式 (: timestamp:duration;command)
-                if line.startswith(':'):
-                    parts = line.split(';', 1)
-                    if len(parts) > 1:
-                        line = parts[1].strip()
-
-                # 过滤敏感命令（包含密码、密钥等）
-                sensitive_keywords = [
-                    'password',
-                    'passwd',
-                    'secret',
-                    'key',
-                    'token',
-                    'api_key',
-                    'api-key']
-                if any(keyword in line.lower() for keyword in sensitive_keywords):
-                    continue
-
-                # 过滤重复命令（保持顺序，只保留最后一次出现）
-                if line in history_commands:
-                    history_commands.remove(line)
-
-                history_commands.append(line)
-
-            # 返回最近的 N 条命令
-            result = history_commands[-count:] if len(
-                history_commands) > count else history_commands
-            logger.debug(f"成功获取 {len(result)} 条 Shell 历史命令")
-            return result
-        else:
-            logger.warning("未找到 Shell 历史文件")
-            return []
-
-    except Exception as e:
-        logger.warning(f"获取 Shell 历史失败: {e}")
+        return list(reversed(commands))
+    except OSError as exc:
+        logger.warning(f"获取 Shell 历史失败: {exc}")
         return []

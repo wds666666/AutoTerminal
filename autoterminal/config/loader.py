@@ -1,6 +1,6 @@
-import os
 import json
-from typing import Dict, Optional, Any
+import os
+
 from autoterminal.utils.logger import logger
 
 
@@ -16,13 +16,15 @@ class ConfigLoader:
         else:
             self.config_file = config_file
 
-    def load_from_file(self) -> Dict:
+    def load_from_file(self) -> dict:
         """从配置文件加载配置"""
         if os.path.exists(self.config_file):
             try:
                 logger.debug(f"从文件加载配置: {self.config_file}")
-                with open(self.config_file, 'r', encoding='utf-8') as f:
+                with open(self.config_file, encoding="utf-8") as f:
                     config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError("配置必须是 JSON 对象")
                 logger.info("配置文件加载成功")
                 return config
             except Exception as e:
@@ -31,6 +33,6 @@ class ConfigLoader:
             logger.debug(f"配置文件不存在: {self.config_file}")
         return {}
 
-    def get_config(self) -> Dict:
+    def get_config(self) -> dict:
         """获取配置"""
         return self.load_from_file()

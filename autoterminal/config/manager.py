@@ -1,124 +1,118 @@
-import os
-import json
-from typing import Dict, Any
+from getpass import getpass
+from typing import Any
+from urllib.parse import urlparse
+
+from autoterminal.config.loader import ConfigLoader
+from autoterminal.config.providers import PROVIDERS, fetch_models
 from autoterminal.utils.logger import logger
+from autoterminal.utils.storage import write_json
 
 
 class ConfigManager:
-    """配置管理器，支持配置的保存和验证"""
+    """保存配置，并以服务商优先的向导补齐缺失字段。"""
 
     def __init__(self, config_file: str = None):
-        if config_file is None:
-            # 将配置文件存储在用户主目录下的.autoterminal目录中
-            home_dir = os.path.expanduser("~")
-            config_dir = os.path.join(home_dir, ".autoterminal")
-            # 确保目录存在
-            os.makedirs(config_dir, exist_ok=True)
-            self.config_file = os.path.join(config_dir, "config.json")
-        else:
-            self.config_file = config_file
+        self.config_file = ConfigLoader(config_file).config_file
+        self.required_keys = ["api_key", "base_url", "model"]
+        self.default_config = {"max_history": 10}
 
-        self.required_keys = ['api_key', 'base_url', 'model']
-        self.default_config = {
-            'base_url': 'https://api.openai.com/v1',
-            'model': 'gpt-4o',
-            'default_prompt': '你现在是一个终端助手,用户输入想要生成的命令,你来输出一个命令,不要任何多余的文本!',
-            'max_history': 10
-        }
-
-    def save_config(self, config: Dict[str, Any]) -> bool:
-        """保存配置到文件"""
+    def save_config(self, config: dict[str, Any]) -> bool:
         try:
-            # 确保目录存在
-            os.makedirs(
-                os.path.dirname(
-                    self.config_file) if os.path.dirname(
-                    self.config_file) else '.',
-                exist_ok=True)
-
-            logger.debug(f"保存配置到文件: {self.config_file}")
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            logger.info("配置文件保存成功")
+            write_json(self.config_file, config)
             return True
-        except Exception as e:
-            logger.error(f"无法保存配置文件 {self.config_file}: {e}")
+        except OSError as exc:
+            logger.error(f"无法保存配置文件: {exc}")
             return False
 
-    def validate_config(self, config: Dict[str, Any]) -> bool:
-        """验证配置是否完整"""
+    def validate_config(self, config: dict[str, Any]) -> bool:
+        if not isinstance(config, dict):
+            return False
+        if not all(
+            isinstance(config.get(key), str) and config[key].strip()
+            for key in self.required_keys
+        ):
+            return False
+        url = urlparse(config["base_url"])
+        return url.scheme in ("http", "https") and bool(url.netloc)
+
+    def initialize_config(self, existing=None) -> dict[str, Any]:
+        print("欢迎使用 AutoTerminal 配置向导！")
+        config = {**self.default_config, **(existing or {})}
         for key in self.required_keys:
-            if not config.get(key):
-                return False
-        return True
-
-    def initialize_config(self) -> Dict[str, Any]:
-        """初始化配置向导"""
-        print("欢迎使用AutoTerminal配置向导！")
-        print("请提供以下信息以完成配置：")
-
-        config = self.default_config.copy()
-
-        # 获取API密钥
+            value = config.get(key)
+            config[key] = value.strip() if isinstance(value, str) else ""
         try:
-            api_key = input("请输入您的API密钥: ").strip()
-            if not api_key:
-                print("错误: API密钥不能为空")
+            if not config.get("base_url"):
+                names = list(PROVIDERS)
+                for index, name in enumerate(names, 1):
+                    print(f"{index}. {PROVIDERS[name][0]}")
+                print("5. 其他（自定义 OpenAI 兼容服务）")
+                while True:
+                    selection = input("请选择服务商 [1-5]: ").strip().lower()
+                    if selection in names:
+                        provider = selection
+                        break
+                    if selection in ("1", "2", "3", "4", "5"):
+                        provider = (
+                            names[int(selection) - 1] if selection != "5" else "custom"
+                        )
+                        break
+                    print("请输入有效序号或服务商名称。")
+                config["provider"] = provider
+                if provider == "custom":
+                    config["base_url"] = input("请输入 Base URL: ").strip()
+                else:
+                    config["base_url"] = PROVIDERS[provider][1]
+            url = urlparse(config["base_url"])
+            if url.scheme not in ("http", "https") or not url.netloc:
+                print("错误：Base URL 必须是有效的 HTTP(S) 地址。")
                 return {}
-            config['api_key'] = api_key
-        except EOFError:
+            if not config.get("api_key"):
+                config["api_key"] = getpass("请输入 API Key（隐藏输入）: ").strip()
+            if not config["api_key"]:
+                print("错误：API Key 不能为空。")
+                return {}
+            if not config.get("model"):
+                print("正在获取模型列表…")
+                try:
+                    models = fetch_models(config["api_key"], config["base_url"])
+                except Exception as exc:
+                    # 不显示服务商返回的原始内容，避免回显凭据。
+                    print(
+                        f"模型列表获取失败（{type(exc).__name__}），可直接输入模型 ID。"
+                    )
+                    models = []
+                for index, model in enumerate(models, 1):
+                    print(f"{index}. {model}")
+                if not models:
+                    print("没有可用的模型列表，请手动输入模型 ID。")
+                while True:
+                    selection = input("选择模型序号，或直接输入模型 ID: ").strip()
+                    if not selection:
+                        print("模型不能为空。")
+                    elif models and selection.isdecimal():
+                        if 1 <= int(selection) <= len(models):
+                            config["model"] = models[int(selection) - 1]
+                            break
+                        print("模型序号超出范围。")
+                    else:
+                        config["model"] = selection
+                        break
+        except (EOFError, KeyboardInterrupt):
             print("\n配置向导已取消。")
             return {}
-        except Exception as e:
-            print(f"错误: 无法读取API密钥输入: {e}")
-            return {}
-
-        # 获取Base URL
-        try:
-            base_url = input(
-                f"请输入Base URL (默认: {self.default_config['base_url']}): ").strip()
-            if base_url:
-                config['base_url'] = base_url
-        except EOFError:
-            print("\n配置向导已取消。")
-            return {}
-        except Exception as e:
-            print(f"警告: 无法读取Base URL输入: {e}")
-
-        # 获取模型名称
-        try:
-            model = input(f"请输入模型名称 (默认: {self.default_config['model']}): ").strip()
-            if model:
-                config['model'] = model
-        except EOFError:
-            print("\n配置向导已取消。")
-            return {}
-        except Exception as e:
-            print(f"警告: 无法读取模型名称输入: {e}")
-
-        # 保存配置
-        if self.save_config(config):
+        if self.validate_config(config) and self.save_config(config):
             print(f"配置已保存到 {self.config_file}")
             return config
-        else:
-            print("配置保存失败")
-            return {}
+        print("配置保存失败。")
+        return {}
 
-    def get_or_create_config(self) -> Dict[str, Any]:
-        """获取现有配置或创建新配置"""
-        # 尝试从文件加载配置
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                # 验证配置
-                if self.validate_config(config):
-                    print("已加载现有配置")
-                    return config
-                else:
-                    print("现有配置不完整")
-            except Exception as e:
-                logger.warning(f"无法读取配置文件 {self.config_file}: {e}")
-
-        # 如果配置不存在或不完整，启动初始化向导
-        return self.initialize_config()
+    def get_or_create_config(self, existing=None) -> dict[str, Any]:
+        config = (
+            ConfigLoader(self.config_file).get_config()
+            if existing is None
+            else existing
+        )
+        return (
+            config if self.validate_config(config) else self.initialize_config(config)
+        )

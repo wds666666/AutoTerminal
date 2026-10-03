@@ -1,176 +1,127 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import sys
-import os
 import argparse
-import glob
+import json
+import os
+import subprocess
+import sys
 
 from autoterminal.config.loader import ConfigLoader
 from autoterminal.config.manager import ConfigManager
-from autoterminal.llm.client import LLMClient
-from autoterminal.utils.helpers import clean_command, get_shell_history
+from autoterminal.config.providers import PROVIDERS
 from autoterminal.history import HistoryManager
+from autoterminal.llm.client import LLMClient
+from autoterminal.shell import get_shell_session, shell_init
+from autoterminal.utils.helpers import (
+    clean_command,
+    get_directory_context,
+    get_shell_history,
+)
 from autoterminal.utils.logger import logger
 
 
+def nonnegative_int(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("必须是非负整数")
+    return number
+
+
 def main():
-    """主程序入口"""
-    logger.info("AutoTerminal 启动")
-
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description='AutoTerminal - 智能终端工具')
-    parser.add_argument('user_input', nargs='*', help='用户输入的自然语言命令')
-    parser.add_argument('--api-key', help='API密钥')
-    parser.add_argument('--base-url', help='Base URL')
-    parser.add_argument('--model', help='模型名称')
-    parser.add_argument('--history-count', type=int, help='历史命令数量')
-
+    parser = argparse.ArgumentParser(description="AutoTerminal - 智能终端工具")
+    parser.add_argument("user_input", nargs="*", help="用户输入的自然语言命令")
+    parser.add_argument("--api-key", help="API 密钥")
+    parser.add_argument("--base-url", help="自定义 Base URL")
+    parser.add_argument("--model", help="模型名称")
+    parser.add_argument("--provider", choices=PROVIDERS, help="选择服务商")
+    parser.add_argument("--configure", action="store_true", help="重新配置服务商")
+    parser.add_argument(
+        "--history-count", type=nonnegative_int, help="历史上下文数量，0 禁用历史上下文"
+    )
+    parser.add_argument(
+        "--shell-init", choices=("bash", "zsh"), help="输出 Shell 接入脚本"
+    )
+    parser.add_argument(
+        "--show-context", action="store_true", help="显示上下文，不调用模型或执行命令"
+    )
     args = parser.parse_args()
-
-    # 合并用户输入
-    user_input = ' '.join(args.user_input).strip()
-    logger.debug(f"用户输入: '{user_input}'")
-
-    # 加载配置
-    logger.debug("加载配置文件")
-    config_loader = ConfigLoader()
-    config = config_loader.get_config()
-
-    # 命令行参数优先级最高
-    if args.api_key:
-        config['api_key'] = args.api_key
-    if args.base_url:
-        config['base_url'] = args.base_url
-    if args.model:
-        config['model'] = args.model
-
-    # 获取历史命令数量配置
-    history_count = args.history_count or config.get('max_history', 10)
-
-    # 如果配置不完整，使用配置管理器初始化
-    config_manager = ConfigManager()
-    if not all([config.get('api_key'), config.get('base_url'), config.get('model')]):
-        config = config_manager.get_or_create_config()
-        if not config:
-            logger.error("缺少必要的配置参数，请通过命令行参数或配置文件提供API密钥、Base URL和模型名称。")
-            return 1
-
-    # 如果有命令行参数输入，直接处理
-    if user_input:
-        # 初始化历史管理器
-        history_manager = HistoryManager(max_history=history_count)
-
-        # 获取历史命令
-        history = history_manager.get_recent_history(history_count)
-
-        # 获取当前目录内容
-        try:
-            current_dir_content = glob.glob("*")
-        except Exception as e:
-            logger.warning(f"无法获取当前目录内容: {e}")
-            current_dir_content = []
-
-        # 获取系统 Shell 历史
-        shell_history = get_shell_history()  # 使用默认值 20
-
-        # 初始化LLM客户端
-        try:
-            llm_client = LLMClient(config)
-        except Exception as e:
-            logger.error(f"LLM客户端初始化失败: {e}")
-            return 1
-
-        # 调用LLM生成命令
-        try:
-            generated_command = llm_client.generate_command(
-                user_input=user_input,
-                history=history,
-                current_dir_content=current_dir_content,
-                shell_history=shell_history
-            )
-            cleaned_command = clean_command(generated_command)
-
-            # 优化输出格式
-            print(f"\033[1;32m$\033[0m {cleaned_command}")
-            print("\033[1;37mPress Enter to execute...\033[0m")
-
-            # 等待用户回车确认执行
-            try:
-                input()
-
-                # 在用户的环境中执行命令
-                logger.info(f"执行命令: {cleaned_command}")
-                os.system(cleaned_command)
-
-                # 记录到历史
-                history_manager.add_command(user_input, cleaned_command)
-                logger.debug("命令已添加到历史记录")
-            except EOFError:
-                print("\n输入已取消。")
-                return 0
-            except Exception as exec_e:
-                logger.error(f"命令执行失败: {exec_e}")
-                return 1
-
-        except Exception as e:
-            logger.error(f"命令生成失败: {e}")
-            return 1
-
+    if args.shell_init:
+        print(shell_init(args.shell_init))
         return 0
-    else:
-        # 处理空输入情况 - 生成基于上下文的推荐命令
-        history_manager = HistoryManager(max_history=history_count)
-        history = history_manager.get_recent_history(history_count)
-
-        try:
-            current_dir_content = glob.glob("*")
-        except Exception as e:
-            logger.warning(f"无法获取当前目录内容: {e}")
-            current_dir_content = []
-
-        # 获取系统 Shell 历史
-        shell_history = get_shell_history()  # 使用默认值 20
-
-        try:
-            llm_client = LLMClient(config)
-        except Exception as e:
-            logger.error(f"LLM客户端初始化失败: {e}")
-            return 1
-
-        # 获取最后执行的命令以避免重复推荐
-        last_executed_command = history_manager.get_last_executed_command()
-
-        try:
-            recommendation = llm_client.generate_command(
-                user_input="",
-                history=history,
-                current_dir_content=current_dir_content,
-                shell_history=shell_history,
-                last_executed_command=last_executed_command
+    config = {} if args.configure else ConfigLoader().get_config()
+    if args.provider:
+        # 切换服务商时不可复用上一个服务商的凭据及模型。
+        if config.get("base_url", "").rstrip("/") != PROVIDERS[args.provider][1].rstrip(
+            "/"
+        ):
+            for key in ("api_key", "model"):
+                config.pop(key, None)
+        config.update(provider=args.provider, base_url=PROVIDERS[args.provider][1])
+    for key in ("api_key", "base_url", "model"):
+        value = getattr(args, key)
+        if value is not None:
+            config[key] = value.strip()
+    if not args.show_context:
+        config = ConfigManager().get_or_create_config(config)
+    if not config and not args.show_context:
+        return 1
+    if args.configure:
+        return 0 if ConfigManager().save_config(config) else 1
+    retention = config.get("max_history", 10)
+    if type(retention) is not int or retention < 0:
+        logger.error("max_history 必须是非负整数")
+        return 1
+    count = args.history_count if args.history_count is not None else retention
+    user_input = " ".join(args.user_input).strip()
+    client = None
+    try:
+        history_manager = HistoryManager(max_history=retention)
+        context = dict(
+            user_input=user_input,
+            history=history_manager.get_recent_history(min(count, 100)),
+            current_dir_content=get_directory_context(),
+            shell_history=get_shell_history(min(count, 100)),
+            last_executed_command=history_manager.get_last_executed_command()
+            if count
+            else "",
+            shell_session=get_shell_session() if count else {},
+        )
+        if args.show_context:
+            print(
+                json.dumps(
+                    {"cwd": os.getcwd(), **context}, ensure_ascii=False, indent=2
+                )
             )
-            cleaned_recommendation = clean_command(recommendation)
-
-            if cleaned_recommendation.strip():
-                print(f"\033[1;34m💡 建议命令:\033[0m {cleaned_recommendation}")
-                print("\033[1;37mPress Enter to execute, or Ctrl+C to cancel...\033[0m")
-                try:
-                    input()
-                    logger.info(f"执行推荐命令: {cleaned_recommendation}")
-                    os.system(cleaned_recommendation)
-                    history_manager.add_command("自动推荐", cleaned_recommendation)
-                    logger.debug("推荐命令已添加到历史记录")
-                except EOFError:
-                    print("\n输入已取消。")
-                    return 0
-                except Exception as exec_e:
-                    logger.error(f"命令执行失败: {exec_e}")
-                    return 1
-            else:
-                print("没有找到相关的命令建议。")
-        except Exception as e:
-            logger.error(f"命令推荐生成失败: {e}")
-            return 1
+            return 0
+        if not user_input and count and not context["shell_session"]:
+            print(
+                "提示：未接入当前 Shell，无法确定刚执行的命令及退出码。可用 --show-context 检查。",
+                file=sys.stderr,
+            )
+        client = LLMClient(config)
+        generated = client.generate_command(**context)
+        command = clean_command(generated)
+        if not command:
+            print("没有找到相关的命令建议。" if not user_input else "模型未生成命令。")
+            return 0 if not user_input else 1
+        print(f"$ {command}")
+        if input("按 Enter 执行，输入其他内容或 Ctrl+C 取消: ").strip():
+            print("已取消。")
+            return 0
+        shell = os.getenv("SHELL") if os.name != "nt" else None
+        result = subprocess.run(command, shell=True, executable=shell)
+        history_manager.add_command(
+            user_input or "自动推荐", command, returncode=result.returncode
+        )
+        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+    except (EOFError, KeyboardInterrupt):
+        print("\n已取消。")
+        return 130
+    except Exception as exc:
+        logger.error(f"处理失败: {exc}")
+        return 1
+    finally:
+        if client is not None:
+            client.close()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import json
 import os
 import platform
 from typing import Any
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -105,6 +106,14 @@ class LLMClient:
         if not user_input:
             system_prompt += "无建议时只输出 NO_COMMAND，立即结束，不输出空白或解释。"
             request_client = self.client.with_options(timeout=8, max_retries=0)
+        request_options = {}
+        if (
+            self.config.get("provider") == "deepseek"
+            or urlparse(self.config["base_url"]).hostname == "api.deepseek.com"
+        ):
+            # DeepSeek 默认思考会消耗输出预算，快捷命令无需推理过程。
+            # 只发给明确的 DeepSeek 接口，避免其他兼容服务拒绝私有参数。
+            request_options["extra_body"] = {"thinking": {"type": "disabled"}}
         response = request_client.chat.completions.create(
             model=self.config["model"],
             messages=[
@@ -118,6 +127,7 @@ class LLMClient:
                 },
             ],
             max_tokens=4096 if user_input else 1024,
+            **request_options,
         )
         if not response.choices:
             raise ValueError("服务商未返回命令")

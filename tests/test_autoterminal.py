@@ -233,6 +233,77 @@ class RegressionTests(unittest.TestCase):
         self.assertIn(".git", payload["messages"][1]["content"])
         self.assertEqual(requests[1].headers["authorization"], "Bearer test-key")
 
+    def test_deepseek_disables_thinking_on_wire(self):
+        import json
+
+        import httpx
+        from openai import OpenAI
+
+        for overrides, disabled in [
+            ({"base_url": "https://api.deepseek.com/v1"}, True),
+            ({"provider": "deepseek"}, True),
+            ({}, False),
+            ({"base_url": "https://api.deepseek.com.example.org/v1"}, False),
+        ]:
+            for user_input in ("", "查看当前目录"):
+                for finish in ("stop", "length"):
+                    with self.subTest(
+                        overrides=overrides, input=user_input, finish=finish
+                    ):
+
+                        def respond(request, disabled=disabled, finish=finish):
+                            payload = json.loads(request.content)
+                            if disabled:
+                                self.assertEqual(
+                                    payload["thinking"], {"type": "disabled"}
+                                )
+                            else:
+                                self.assertNotIn("thinking", payload)
+                            return httpx.Response(
+                                200,
+                                json={
+                                    "id": "test",
+                                    "object": "chat.completion",
+                                    "created": 0,
+                                    "model": "test-model",
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "finish_reason": finish,
+                                            "message": {
+                                                "role": "assistant",
+                                                "content": "pwd",
+                                            },
+                                        }
+                                    ],
+                                },
+                            )
+
+                        def make_client(**kwargs):
+                            return OpenAI(
+                                **kwargs,
+                                http_client=httpx.Client(
+                                    transport=httpx.MockTransport(respond)
+                                ),
+                            )
+
+                        with patch(
+                            "autoterminal.llm.client.OpenAI", side_effect=make_client
+                        ):
+                            client = LLMClient({**self.config, **overrides})
+                            try:
+                                if finish == "length":
+                                    with self.assertRaisesRegex(
+                                        ValueError, "未完整结束"
+                                    ):
+                                        client.generate_command(user_input)
+                                else:
+                                    self.assertEqual(
+                                        client.generate_command(user_input), "pwd"
+                                    )
+                            finally:
+                                client.close()
+
     def run_cli(self, confirmation, count="0"):
         patches = [
             patch("sys.argv", ["at", "--history-count", count, "test"]),

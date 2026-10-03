@@ -95,6 +95,8 @@ at --history-count 5 "基于前面的命令，删除所有.txt文件"
 
 程序会显示生成命令，仅按回车确认后执行，输入其他内容或 Ctrl+C 取消。截断响应不会执行，执行退出码会返回给调用者。
 
+DeepSeek 请求默认显式关闭思考（`thinking.type=disabled`），同时适用于直接生成和无参数推荐，避免思考增加等待时间、占用命令输出预算。通过服务商 `deepseek` 或官方接口域名识别；其他兼容服务不发送此专用参数。参见 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)。
+
 ## 示例
 
 ```
